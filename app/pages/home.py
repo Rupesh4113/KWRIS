@@ -78,11 +78,11 @@ def render_home_page():
             st.markdown("#### 📂 Quick Load Sample Datasets:")
             if st.button("Load Arkavathi Basin (24 Stations, 1991–2025)"):
                 st.session_state["quick_load"] = "ARKAVATHI RAINFALL.xlsx"
-                st.session_state["current_page"] = "📤 Upload Rainfall Data"
+                st.session_state["current_page"] = "📤 Upload & Profiling"
                 st.rerun()
             if st.button("Load Ghataprabha Basin (30 Stations, 1991–2025)"):
                 st.session_state["quick_load"] = "GHATAPRABHA RF KWRIS 1991-2025.xlsx"
-                st.session_state["current_page"] = "📤 Upload Rainfall Data"
+                st.session_state["current_page"] = "📤 Upload & Profiling"
                 st.rerun()
         with c2:
             st.markdown("#### 🚀 Operational Capabilities:")

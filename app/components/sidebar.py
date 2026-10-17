@@ -5,7 +5,7 @@ import streamlit as st
 
 
 def render_sidebar():
-    """Render the Karnataka-styled navigation sidebar with mode selector and session stats."""
+    """Render the Karnataka-styled compact navigation sidebar with mode selector and session stats."""
     with st.sidebar:
         # Karnataka Government / KWRIS branding
         st.markdown(
@@ -19,9 +19,9 @@ def render_sidebar():
         )
         
         # Operational Processing Mode
-        st.markdown("### ⚙️ Processing Mode")
+        st.markdown("### ⚙️ Operational Mode")
         mode = st.radio(
-            "Select operational mode:",
+            "Select mode:",
             options=["Validation Only", "Suggest Corrections", "Apply Approved Corrections"],
             index=["Validation Only", "Suggest Corrections", "Apply Approved Corrections"].index(
                 st.session_state.get("processing_mode", "Suggest Corrections")
@@ -36,26 +36,26 @@ def render_sidebar():
         
         st.divider()
         
-        # Navigation
+        # Compact 6-Stage Primary Navigation
         st.markdown("### 📌 Navigation")
         pages = [
-            "🏠 Home Dashboard",
-            "📤 Upload Rainfall Data",
-            "📊 Data Profiling",
-            "🔍 Primary Validation (P1–P5)",
-            "🌐 Neighbour Validation (S1–S8)",
-            "🛠️ Missing Data & Correction (G1–G8)",
-            "📈 Statistical Analysis (A1–A6)",
-            "🏆 Station Quality Ranking",
-            "📉 Visual Analytics",
-            "📑 Export Reports",
-            "📖 Rules & Documentation"
+            "🏠 Executive Dashboard",
+            "📤 Upload & Profiling",
+            "🔍 Validation Results",
+            "🏆 Station Priority & Analytics",
+            "🛠️ Correction & Audit",
+            "📑 Export Reports & Rules"
         ]
         
+        # Set default page if previous page was from old schema
+        saved_page = st.session_state.get("current_page", "🏠 Executive Dashboard")
+        if saved_page not in pages:
+            saved_page = "🏠 Executive Dashboard"
+            
         current_page = st.radio(
-            "Go to page:",
+            "Go to stage:",
             pages,
-            index=pages.index(st.session_state.get("current_page", "🏠 Home Dashboard")),
+            index=pages.index(saved_page),
             label_visibility="collapsed"
         )
         st.session_state["current_page"] = current_page

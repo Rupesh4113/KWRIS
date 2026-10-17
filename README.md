@@ -92,17 +92,12 @@ KWRIS/
 │   │   ├── charts.py             # Plotly charts (time series, double-mass, heatmap)
 │   │   └── data_tables.py        # Table formatting & rule badges
 │   └── pages/
-│       ├── home.py               # Home dashboard & urgent leaderboard
-│       ├── upload.py             # Data ingestion & schema mapper
-│       ├── profiling.py          # Profiling metrics & sequence gap check
-│       ├── validation.py         # Primary validation (P1–P5)
-│       ├── neighbour_validation.py # Secondary validation (S1–S8)
-│       ├── correction.py         # Missing data review workflow (G1–G8)
-│       ├── statistics.py         # Hydrological statistics & consistency (A1–A6)
-│       ├── ranking.py            # Station quality priority leaderboard
-│       ├── analytics.py          # Visual analytics & diagnostic charts
-│       ├── reports.py            # 13-sheet Excel export & downloads
-│       └── documentation.py      # Rules knowledge base & manual references
+│       ├── home.py                        # 1. Executive dashboard & urgent leaderboard
+│       ├── upload_and_profiling.py        # 2. Unified upload, column mapping & profiling
+│       ├── validation_results.py          # 3. Unified primary & secondary validation (P1–P5, S1–S8)
+│       ├── station_priority_analytics.py  # 4. Station priority ranking & decision analytics (A1–A6)
+│       ├── correction_review.py           # 5. Missing data review & approval workflow (G1–G8)
+│       └── export_reports.py              # 6. 13-sheet Excel report export & rules guide
 ├── src/
 │   ├── ingestion.py              # Ingestion, format detection, normalization
 │   ├── preprocessing.py          # Dataset profiling & date gap detection

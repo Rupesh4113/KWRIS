@@ -46,16 +46,11 @@ st.markdown(
 # Import components and page renderers
 from app.components.sidebar import render_sidebar
 from app.pages.home import render_home_page
-from app.pages.upload import render_upload_page
-from app.pages.profiling import render_profiling_page
-from app.pages.validation import render_validation_page
-from app.pages.neighbour_validation import render_neighbour_validation_page
-from app.pages.correction import render_correction_page
-from app.pages.statistics import render_statistics_page
-from app.pages.ranking import render_ranking_page
-from app.pages.analytics import render_analytics_page
-from app.pages.reports import render_reports_page
-from app.pages.documentation import render_documentation_page
+from app.pages.upload_and_profiling import render_upload_and_profiling_page
+from app.pages.validation_results import render_validation_results_page
+from app.pages.station_priority_analytics import render_station_priority_analytics_page
+from app.pages.correction_review import render_correction_review_page
+from app.pages.export_reports import render_export_reports_page
 
 
 def main():
@@ -63,28 +58,18 @@ def main():
     current_page = render_sidebar()
     
     # Route to selected page
-    if current_page == "🏠 Home Dashboard":
+    if current_page == "🏠 Executive Dashboard":
         render_home_page()
-    elif current_page == "📤 Upload Rainfall Data":
-        render_upload_page()
-    elif current_page == "📊 Data Profiling":
-        render_profiling_page()
-    elif current_page == "🔍 Primary Validation (P1–P5)":
-        render_validation_page()
-    elif current_page == "🌐 Neighbour Validation (S1–S8)":
-        render_neighbour_validation_page()
-    elif current_page == "🛠️ Missing Data & Correction (G1–G8)":
-        render_correction_page()
-    elif current_page == "📈 Statistical Analysis (A1–A6)":
-        render_statistics_page()
-    elif current_page == "🏆 Station Quality Ranking":
-        render_ranking_page()
-    elif current_page == "📉 Visual Analytics":
-        render_analytics_page()
-    elif current_page == "📑 Export Reports":
-        render_reports_page()
-    elif current_page == "📖 Rules & Documentation":
-        render_documentation_page()
+    elif current_page == "📤 Upload & Profiling":
+        render_upload_and_profiling_page()
+    elif current_page == "🔍 Validation Results":
+        render_validation_results_page()
+    elif current_page == "🏆 Station Priority & Analytics":
+        render_station_priority_analytics_page()
+    elif current_page == "🛠️ Correction & Audit":
+        render_correction_review_page()
+    elif current_page == "📑 Export Reports & Rules":
+        render_export_reports_page()
     else:
         render_home_page()
 
