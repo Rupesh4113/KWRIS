@@ -218,3 +218,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local runtime SQLite database and scratch
+*.db
+scratch/
+!data/sample/

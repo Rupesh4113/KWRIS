@@ -1,342 +1,198 @@
-"""Rainfall Data Ingestion and Normalization Module for KWRIS."""
+"""Robust File Ingestion and Dataset Normalization for RainfallIQ."""
 
 from __future__ import annotations
 import io
-import re
-from typing import Any, Dict, List, Optional, Tuple, Union
-import numpy as np
+import os
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Any, Union
 import pandas as pd
-from src.reference_data import lookup_station_coordinates
+import numpy as np
+
+from src.configuration import APP_CONFIG
+from src.schema_detection import (
+    detect_columns,
+    detect_dataset_format,
+    convert_wide_to_long,
+    detect_observation_frequency,
+    detect_unit_from_headers_or_values
+)
 
 
-# Common missing indicators in Indian meteorological and water resource datasets
-DEFAULT_MISSING_CODES = [-99, -99.0, -999, -999.0, -9999, 9999, "NA", "NaN", "null", "NULL", "-", "--", "NR"]
-
-
-def detect_file_sheets(file_or_path: Any) -> List[str]:
-    """Detect available sheet names for Excel files or return empty list for CSV."""
-    if isinstance(file_or_path, str) and file_or_path.lower().endswith(".csv"):
-        return []
+def get_excel_sheet_names(file_or_path: Union[str, Path, io.BytesIO]) -> List[str]:
+    """Retrieve all sheet names from an Excel file safely."""
     try:
-        xl = pd.ExcelFile(file_or_path)
-        return xl.sheet_names
-    except Exception:
-        return []
+        excel_file = pd.ExcelFile(file_or_path)
+        return excel_file.sheet_names
+    except Exception as e:
+        return ["Default"]
 
 
-def read_raw_dataset(
-    file_or_path: Any,
-    sheet_name: Optional[Union[str, int]] = None
+def read_raw_data(
+    file_or_path: Union[str, Path, io.BytesIO],
+    filename: str,
+    sheet_name: Optional[str] = None
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
-    Read raw Excel or CSV into a DataFrame and return file metadata.
-    Preserves exact raw contents without modification.
+    Read CSV or Excel file into a raw DataFrame with metadata.
+    Handles encoding fallback, header cleaning, and sheet selection.
     """
-    meta: Dict[str, Any] = {"format": "unknown"}
-    
-    # Check if string path
-    if isinstance(file_or_path, str):
-        meta["file_name"] = file_or_path.split("/")[-1].split("\\")[-1]
-        if file_or_path.lower().endswith(".csv"):
-            meta["format"] = "csv"
-            df = pd.read_csv(file_or_path)
-        else:
-            meta["format"] = "excel"
-            xl = pd.ExcelFile(file_or_path)
-            meta["sheet_names"] = xl.sheet_names
-            target_sheet = sheet_name if sheet_name is not None else xl.sheet_names[0]
-            meta["selected_sheet"] = target_sheet
-            df = pd.read_excel(file_or_path, sheet_name=target_sheet)
+    ext = Path(filename).suffix.lower()
+    df = pd.DataFrame()
+    metadata: Dict[str, Any] = {
+        "filename": filename,
+        "extension": ext,
+        "sheet_name": sheet_name,
+        "encoding": "utf-8",
+        "raw_rows": 0,
+        "raw_cols": 0
+    }
+
+    if ext in [".xlsx", ".xls"]:
+        sheets = get_excel_sheet_names(file_or_path)
+        metadata["available_sheets"] = sheets
+        selected_sheet = sheet_name if sheet_name in sheets else sheets[0]
+        metadata["sheet_name"] = selected_sheet
+        df = pd.read_excel(file_or_path, sheet_name=selected_sheet)
+    elif ext == ".csv":
+        # Encoding fallbacks
+        encodings = ["utf-8", "latin-1", "cp1252"]
+        success = False
+        for enc in encodings:
+            try:
+                if hasattr(file_or_path, "seek"):
+                    file_or_path.seek(0)
+                df = pd.read_csv(file_or_path, encoding=enc, low_memory=False)
+                metadata["encoding"] = enc
+                success = True
+                break
+            except (UnicodeDecodeError, Exception):
+                continue
+        if not success:
+            if hasattr(file_or_path, "seek"):
+                file_or_path.seek(0)
+            df = pd.read_csv(file_or_path, encoding="utf-8", errors="replace", low_memory=False)
+            metadata["encoding"] = "utf-8 (lossy)"
     else:
-        # Streamlit UploadedFile or BytesIO
-        file_name = getattr(file_or_path, "name", "uploaded_data")
-        meta["file_name"] = file_name
-        if file_name.lower().endswith(".csv"):
-            meta["format"] = "csv"
-            df = pd.read_csv(file_or_path)
-        else:
-            meta["format"] = "excel"
-            xl = pd.ExcelFile(file_or_path)
-            meta["sheet_names"] = xl.sheet_names
-            target_sheet = sheet_name if sheet_name is not None else xl.sheet_names[0]
-            meta["selected_sheet"] = target_sheet
-            df = pd.read_excel(file_or_path, sheet_name=target_sheet)
-            
-    meta["raw_rows"] = len(df)
-    meta["raw_cols"] = len(df.columns)
-    meta["columns"] = df.columns.tolist()
-    return df, meta
+        raise ValueError(f"Unsupported file format: {ext}. Please upload a .csv or .xlsx file.")
+
+    # Drop completely empty rows and columns
+    df.dropna(how="all", inplace=True)
+    df.dropna(how="all", axis=1, inplace=True)
+
+    metadata["raw_rows"] = len(df)
+    metadata["raw_cols"] = len(df.columns)
+    metadata["raw_columns"] = list(df.columns)
+
+    return df, metadata
 
 
-def detect_data_layout(df: pd.DataFrame) -> str:
-    """
-    Detect whether DataFrame is in 'long' format (station, date, rainfall columns)
-    or 'wide' format (date column + station columns).
-    """
-    col_names = [str(c).lower().strip() for c in df.columns]
+def clean_missing_codes(series: pd.Series) -> pd.Series:
+    """Replace configured missing value codes (-99, -999, 'NA', etc.) with NaN."""
+    s = series.copy()
+    missing_codes = APP_CONFIG.get("missing_codes", [])
     
-    # Check for long-format keywords
-    has_rf_col = any(any(k in c for k in ["rf", "rain", "precip", "value", "rainfall"]) for c in col_names)
-    has_station_col = any(any(k in c for k in ["station", "location", "wims", "site", "gauge"]) for c in col_names)
+    # Direct replacement
+    s = s.replace(missing_codes, np.nan)
     
-    if has_rf_col and has_station_col:
-        return "long"
-        
-    # Check if there is a date column and multiple numeric columns
-    date_col_candidates = [c for c in df.columns if any(k in str(c).lower() for k in ["date", "day", "time", "timestamp"])]
-    if date_col_candidates:
-        other_cols = [c for c in df.columns if c != date_col_candidates[0]]
-        # If there are many other columns (>= 3) and mostly numeric
-        numeric_count = sum(pd.api.types.is_numeric_dtype(df[c]) for c in other_cols)
-        if len(other_cols) >= 2 and numeric_count / max(1, len(other_cols)) >= 0.5:
-            return "wide"
-            
-    return "long" if has_rf_col else "wide"
+    # String pattern matching for string objects
+    if s.dtype == object or pd.api.types.is_string_dtype(s):
+        s = s.apply(
+            lambda x: np.nan if str(x).strip().upper() in ["NA", "NAN", "NULL", "-", "--", "NR", "NONE"] else x
+        )
+    return s
 
 
-def suggest_column_mappings(df: pd.DataFrame, layout: str = "long") -> Dict[str, Optional[str]]:
-    """
-    Suggest intelligent column mappings based on common KWRIS and hydrological naming conventions.
-    """
-    mapping: Dict[str, Optional[str]] = {
-        "station_id": None,
-        "station_name": None,
-        "date": None,
-        "rainfall": None,
-        "unit": None,
-        "gauge_type": None,
-        "latitude": None,
-        "longitude": None,
-        "basin": None,
-        "subbasin": None
-    }
-    
-    cols = df.columns.tolist()
-    cols_lower = {str(c).lower().strip(): c for c in cols}
-    
-    # Date mapping
-    for pat in ["day", "date", "timestamp", "obs_date", "reading_date", "datetime"]:
-        for cl, orig in cols_lower.items():
-            if pat == cl or pat in cl:
-                mapping["date"] = orig
-                break
-        if mapping["date"]:
-            break
-            
-    if layout == "long":
-        # Station ID (e.g. WIMS Code, Station_ID, StnID)
-        for pat in ["wims code", "wims_code", "station_id", "stn_id", "station code", "stationid", "id"]:
-            for cl, orig in cols_lower.items():
-                if pat == cl or pat in cl:
-                    mapping["station_id"] = orig
-                    break
-            if mapping["station_id"]:
-                break
-                
-        # Station Name (e.g. LocationName, StationName, Station)
-        for pat in ["locationname", "stationname", "location_name", "station_name", "location", "station", "stn_name"]:
-            for cl, orig in cols_lower.items():
-                if pat == cl or pat in cl:
-                    mapping["station_name"] = orig
-                    break
-            if mapping["station_name"]:
-                break
-                
-        # Rainfall value (e.g. RF(mm), Rainfall, Rain_mm, Precip)
-        for pat in ["rf(mm)", "rf (mm)", "rf_mm", "rainfall(mm)", "rainfall", "rf", "precipitation", "precip", "value"]:
-            for cl, orig in cols_lower.items():
-                if pat == cl or pat in cl:
-                    mapping["rainfall"] = orig
-                    break
-            if mapping["rainfall"]:
-                break
-
-    # Basin / Subbasin
-    for pat in ["basinname", "basin_name", "basin"]:
-        for cl, orig in cols_lower.items():
-            if pat == cl or pat in cl:
-                mapping["basin"] = orig
-                break
-        if mapping["basin"]:
-            break
-
-    for pat in ["subbasinname", "subbasin_name", "subbasin", "sub_basin"]:
-        for cl, orig in cols_lower.items():
-            if pat == cl or pat in cl:
-                mapping["subbasin"] = orig
-                break
-        if mapping["subbasin"]:
-            break
-
-    # Latitude / Longitude
-    for pat in ["latitude", "lat", "y"]:
-        for cl, orig in cols_lower.items():
-            if pat == cl or cl.startswith("lat"):
-                mapping["latitude"] = orig
-                break
-        if mapping["latitude"]:
-            break
-
-    for pat in ["longitude", "lon", "long", "x"]:
-        for cl, orig in cols_lower.items():
-            if pat == cl or cl.startswith("lon") or cl.startswith("long"):
-                mapping["longitude"] = orig
-                break
-        if mapping["longitude"]:
-            break
-
-    # Gauge type
-    for pat in ["gauge_type", "gaugetype", "gauge", "instrument", "type"]:
-        for cl, orig in cols_lower.items():
-            if pat == cl or pat in cl:
-                mapping["gauge_type"] = orig
-                break
-        if mapping["gauge_type"]:
-            break
-
-    return mapping
-
-
-def normalize_dataset(
-    df_raw: pd.DataFrame,
-    layout: str,
-    mapping: Dict[str, Optional[str]],
-    missing_codes: Optional[List[Any]] = None
+def normalize_rainfall_dataset(
+    df: pd.DataFrame,
+    column_mapping: Dict[str, Optional[str]],
+    unit: str = "mm",
+    format_type: str = "long"
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
-    Normalize raw DataFrame into standard long format schema:
-    [original_row_id, station_id, station_name, date, rainfall_mm, gauge_type, latitude, longitude, basin, subbasin]
+    Standardize DataFrame into a unified schema:
+    [date, station_id, station_name, rainfall, district, state, latitude, longitude, unit]
+    Preserves original values in 'original_rainfall'.
     """
-    if missing_codes is None:
-        missing_codes = DEFAULT_MISSING_CODES
-        
-    audit_meta: Dict[str, Any] = {
-        "layout": layout,
-        "input_rows": len(df_raw),
-        "missing_codes_used": missing_codes,
-        "warnings": []
+    date_col = column_mapping.get("date")
+    if not date_col or date_col not in df.columns:
+        raise ValueError("A valid 'date' column must be identified.")
+
+    work_df = df.copy()
+
+    # Handle wide format transformation if applicable
+    if format_type == "wide":
+        station_cols = [c for c in df.columns if c != date_col]
+        work_df = convert_wide_to_long(work_df, date_col, station_cols, unit=unit)
+        station_id_col = "station_id"
+        station_name_col = "station_name"
+        rainfall_col = "rainfall"
+    else:
+        station_id_col = column_mapping.get("station_id")
+        station_name_col = column_mapping.get("station_name")
+        rainfall_col = column_mapping.get("rainfall")
+
+        if not rainfall_col or rainfall_col not in work_df.columns:
+            raise ValueError("A valid 'rainfall' column must be identified.")
+
+    # Create standardized dataframe
+    norm_df = pd.DataFrame()
+    
+    # 1. Date parsing
+    norm_df["date"] = pd.to_datetime(work_df[date_col], errors="coerce")
+    
+    # 2. Station ID and Name
+    if station_id_col and station_id_col in work_df.columns:
+        norm_df["station_id"] = work_df[station_id_col].astype(str).str.strip()
+    else:
+        norm_df["station_id"] = "STN_DEFAULT"
+
+    if station_name_col and station_name_col in work_df.columns:
+        norm_df["station_name"] = work_df[station_name_col].astype(str).str.strip()
+    else:
+        norm_df["station_name"] = norm_df["station_id"]
+
+    # 3. Rainfall processing
+    raw_rf_series = work_df[rainfall_col]
+    norm_df["original_rainfall"] = raw_rf_series  # Exact original preservation
+    
+    cleaned_rf = clean_missing_codes(raw_rf_series)
+    norm_df["rainfall"] = pd.to_numeric(cleaned_rf, errors="coerce")
+
+    # Unit conversion to mm if needed
+    unit_multiplier = APP_CONFIG["unit_conversion_to_mm"].get(unit.lower(), 1.0)
+    if unit_multiplier != 1.0:
+        norm_df["rainfall"] = norm_df["rainfall"] * unit_multiplier
+        norm_df["unit"] = "mm"
+        norm_df["original_unit"] = unit
+    else:
+        norm_df["unit"] = unit
+        norm_df["original_unit"] = unit
+
+    # 4. Optional Metadata Columns
+    opt_cols = ["district", "state", "latitude", "longitude", "gauge_type"]
+    for opt in opt_cols:
+        mapped_col = column_mapping.get(opt)
+        if mapped_col and mapped_col in work_df.columns:
+            if opt in ["latitude", "longitude"]:
+                norm_df[opt] = pd.to_numeric(work_df[mapped_col], errors="coerce")
+            else:
+                norm_df[opt] = work_df[mapped_col].astype(str).str.strip()
+        else:
+            norm_df[opt] = np.nan
+
+    # Calculate dataset summary metrics
+    valid_dates = norm_df["date"].dropna()
+    summary: Dict[str, Any] = {
+        "total_records": len(norm_df),
+        "total_stations": norm_df["station_id"].nunique(),
+        "start_date": valid_dates.min().strftime("%Y-%m-%d") if not valid_dates.empty else "N/A",
+        "end_date": valid_dates.max().strftime("%Y-%m-%d") if not valid_dates.empty else "N/A",
+        "frequency": detect_observation_frequency(norm_df["date"]),
+        "missing_rainfall_count": int(norm_df["rainfall"].isna().sum()),
+        "valid_rainfall_count": int(norm_df["rainfall"].notna().sum()),
+        "zero_rainfall_count": int((norm_df["rainfall"] == 0.0).sum()),
+        "max_rainfall_mm": float(norm_df["rainfall"].max()) if norm_df["rainfall"].notna().any() else 0.0,
+        "mean_rainfall_mm": float(norm_df["rainfall"].mean()) if norm_df["rainfall"].notna().any() else 0.0
     }
-    
-    if layout == "wide":
-        # Date column
-        date_col = mapping.get("date")
-        if not date_col or date_col not in df_raw.columns:
-            # Fallback to first column
-            date_col = df_raw.columns[0]
-            
-        station_cols = [c for c in df_raw.columns if c != date_col]
-        
-        # Melt wide into long
-        melted = df_raw.melt(
-            id_vars=[date_col],
-            value_vars=station_cols,
-            var_name="station_name",
-            value_name="rainfall_raw"
-        )
-        melted["station_id"] = melted["station_name"]
-        melted["date_raw"] = melted[date_col]
-        melted["gauge_type"] = "manual"
-        melted["basin"] = None
-        melted["subbasin"] = None
-        melted["latitude"] = np.nan
-        melted["longitude"] = np.nan
-        melted["original_row_id"] = melted.index
-        df_work = melted
-        
-    else:  # long layout
-        df_work = pd.DataFrame()
-        df_work["original_row_id"] = df_raw.index
-        
-        # Date
-        date_col = mapping.get("date")
-        if date_col and date_col in df_raw.columns:
-            df_work["date_raw"] = df_raw[date_col]
-        else:
-            raise ValueError("Observation date column is required and could not be identified.")
-            
-        # Station Name / ID
-        stn_name_col = mapping.get("station_name")
-        stn_id_col = mapping.get("station_id")
-        
-        if stn_name_col and stn_name_col in df_raw.columns:
-            df_work["station_name"] = df_raw[stn_name_col].astype(str).str.strip()
-        elif stn_id_col and stn_id_col in df_raw.columns:
-            df_work["station_name"] = df_raw[stn_id_col].astype(str).str.strip()
-        else:
-            df_work["station_name"] = "STATION_1"
-            audit_meta["warnings"].append("No station name column found; assigned default 'STATION_1'.")
-            
-        if stn_id_col and stn_id_col in df_raw.columns:
-            df_work["station_id"] = df_raw[stn_id_col].astype(str).str.strip()
-        else:
-            df_work["station_id"] = df_work["station_name"]
-            
-        # Rainfall
-        rf_col = mapping.get("rainfall")
-        if rf_col and rf_col in df_raw.columns:
-            df_work["rainfall_raw"] = df_raw[rf_col]
-        else:
-            raise ValueError("Rainfall value column is required and could not be identified.")
-            
-        # Gauge type
-        gt_col = mapping.get("gauge_type")
-        if gt_col and gt_col in df_raw.columns:
-            df_work["gauge_type"] = df_raw[gt_col].astype(str).str.lower().str.strip()
-        else:
-            df_work["gauge_type"] = "manual"
-            
-        # Basin / Subbasin
-        basin_col = mapping.get("basin")
-        df_work["basin"] = df_raw[basin_col] if basin_col and basin_col in df_raw.columns else None
-        
-        subbasin_col = mapping.get("subbasin")
-        df_work["subbasin"] = df_raw[subbasin_col] if subbasin_col and subbasin_col in df_raw.columns else None
-        
-        # Coordinates
-        lat_col = mapping.get("latitude")
-        df_work["latitude"] = pd.to_numeric(df_raw[lat_col], errors="coerce") if lat_col and lat_col in df_raw.columns else np.nan
-        
-        lon_col = mapping.get("longitude")
-        df_work["longitude"] = pd.to_numeric(df_raw[lon_col], errors="coerce") if lon_col and lon_col in df_raw.columns else np.nan
 
-    # Parse Dates safely
-    df_work["date"] = pd.to_datetime(df_work["date_raw"], errors="coerce")
-    invalid_dates_count = df_work["date"].isna().sum()
-    if invalid_dates_count > 0:
-        audit_meta["warnings"].append(f"Detected {invalid_dates_count} invalid or unparseable dates.")
-
-    # Process Rainfall values and missing codes
-    # Keep zero distinct from missing
-    clean_rf = df_work["rainfall_raw"].copy()
-    
-    # Mask known missing codes
-    for mc in missing_codes:
-        try:
-            clean_rf = clean_rf.replace(mc, np.nan)
-        except Exception:
-            pass
-            
-    # Convert string numbers to float, invalid strings to NaN
-    df_work["rainfall_mm"] = pd.to_numeric(clean_rf, errors="coerce")
-
-    # If coordinates are missing, attempt lookup from built-in catalog
-    missing_coords_mask = df_work["latitude"].isna() | df_work["longitude"].isna()
-    if missing_coords_mask.any():
-        for stn in df_work.loc[missing_coords_mask, "station_name"].unique():
-            coords = lookup_station_coordinates(stn)
-            if coords:
-                lat, lon = coords
-                stn_mask = df_work["station_name"] == stn
-                df_work.loc[stn_mask & df_work["latitude"].isna(), "latitude"] = lat
-                df_work.loc[stn_mask & df_work["longitude"].isna(), "longitude"] = lon
-
-    audit_meta["output_rows"] = len(df_work)
-    audit_meta["stations_found"] = df_work["station_name"].nunique()
-    audit_meta["valid_rainfall_rows"] = df_work["rainfall_mm"].notna().sum()
-    audit_meta["missing_rainfall_rows"] = df_work["rainfall_mm"].isna().sum()
-    
-    final_cols = [
-        "original_row_id", "station_id", "station_name", "date", 
-        "rainfall_mm", "gauge_type", "latitude", "longitude", "basin", "subbasin"
-    ]
-    return df_work[final_cols].copy(), audit_meta
+    return norm_df, summary
