@@ -23,6 +23,10 @@ def render_reports_page():
     predictions_df = st.session_state.predictions_df
     audit_df = st.session_state.storage_mgr.get_audit_trail() if "storage_mgr" in st.session_state else pd.DataFrame()
 
+    cp1_rep = st.session_state.get("checkpoint1_report", {})
+    cp1_summary = cp1_rep.get("station_summary", pd.DataFrame())
+    cp1_missing = cp1_rep.get("missing_dates_detail", pd.DataFrame())
+
     generator = ReportGenerator()
 
     # Pre-generate Excel Workbook in-memory
@@ -33,18 +37,22 @@ def render_reports_page():
             priorities_df=priorities_df,
             predictions_df=predictions_df,
             audit_df=audit_df,
-            dataset_df=norm_df
+            dataset_df=norm_df,
+            checkpoint1_summary=cp1_summary,
+            missing_dates_df=cp1_missing
         )
 
-    st.subheader("Production Excel Workbook (6 Sheets)")
+    st.subheader("Production Excel Workbook (Up to 8 Sheets)")
     st.markdown("""
     Includes:
     1. **Executive_Summary**: KPIs, Quality Score calculation formula, and provenance metadata.
-    2. **Data_Issues**: Full catalog of flagged errors, severities, rules, and recommended actions.
-    3. **Station_Priority_Health**: Ranked station health scores (0-100) and urgency triage tiers.
-    4. **Missing_Predictions**: All AI-imputed values tagged **`ESTIMATED — NOT OBSERVED`** with confidence intervals.
-    5. **Audit_Trail**: Immutable engineering review decisions, notes, and timestamps.
-    6. **Full_Dataset_With_Estimates**: Original field measurements preserved with separate estimated fields.
+    2. **Station_Timeline_CP1**: Checkpoint 1 Station-wise expected vs recorded days, missing days, and blackout gaps.
+    3. **Missing_Dates_Detail**: Granular calendar dates missing from each station's continuous observation window.
+    4. **Data_Issues**: Full catalog of flagged errors, severities, rules, and recommended actions.
+    5. **Station_Priority_Health**: Ranked station health scores (0-100) and urgency triage tiers.
+    6. **Missing_Predictions**: All AI-imputed values tagged **`ESTIMATED — NOT OBSERVED`** with confidence intervals.
+    7. **Audit_Trail**: Immutable engineering review decisions, notes, and timestamps.
+    8. **Full_Dataset_With_Estimates**: Original field measurements preserved with separate estimated fields.
     """)
 
     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -62,9 +70,35 @@ def render_reports_page():
     st.markdown("---")
     st.subheader("Granular CSV Exports")
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
 
     with c1:
+        st.markdown("#### **Checkpoint 1 Timeline Summary CSV**")
+        st.caption(f"{len(cp1_summary)} stations analyzed for timeline continuity.")
+        if not cp1_summary.empty:
+            clean_cp1_csv = sanitize_dataframe(cp1_summary).to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "📥 Download CP1 Summary CSV",
+                data=clean_cp1_csv,
+                file_name=f"RainfallIQ_CP1_Timeline_Summary_{timestamp_str}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+    with c2:
+        st.markdown("#### **Missing Dates Detail CSV**")
+        st.caption(f"{len(cp1_missing):,} exact missing calendar dates.")
+        if not cp1_missing.empty:
+            clean_miss_csv = sanitize_dataframe(cp1_missing).to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "📥 Download Missing Dates CSV",
+                data=clean_miss_csv,
+                file_name=f"RainfallIQ_Missing_Dates_{timestamp_str}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+    with c3:
         st.markdown("#### **Flagged Issues CSV**")
         st.caption(f"{len(issues_df)} flagged validation issues and anomalies.")
         if not issues_df.empty:
@@ -78,7 +112,7 @@ def render_reports_page():
                 use_container_width=True
             )
 
-    with c2:
+    with c4:
         st.markdown("#### **Missing Predictions CSV**")
         st.caption(f"{len(predictions_df)} AI estimates (ESTIMATED — NOT OBSERVED).")
         if not predictions_df.empty:
@@ -92,21 +126,7 @@ def render_reports_page():
                 use_container_width=True
             )
         else:
-            st.info("No predictions generated yet.")
-
-    with c3:
-        st.markdown("#### **Station Quality Rankings CSV**")
-        st.caption(f"{len(priorities_df)} station priority scores and actions.")
-        if not priorities_df.empty:
-            clean_prio = sanitize_dataframe(priorities_df)
-            csv_prio = clean_prio.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "📥 Download Station Ranking CSV",
-                data=csv_prio,
-                file_name=f"RainfallIQ_Station_Rankings_{timestamp_str}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+            st.info("No predictions yet.")
 
     st.markdown("---")
     st.info("🔒 **Data Governance & Security Note:** All exports are automatically sanitized against spreadsheet formula injection (CWE-1236) and preserve original measured observations without in-place mutation.")

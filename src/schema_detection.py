@@ -17,16 +17,17 @@ COLUMN_PATTERNS = {
     "station_id": [
         r"^station_?id$", r"^stn_?id$", r"^stationid$", r"^stnid$",
         r"^station_?code$", r"^stn_?code$", r"^id$", r"^code$",
-        r"^site_?id$", r"^gauge_?id$"
+        r"^site_?id$", r"^gauge_?id$", r"^wims_?code$", r"^wims$"
     ],
     "station_name": [
         r"^station_?name$", r"^stn_?name$", r"^stationname$",
-        r"^station$", r"^stn$", r"^place$", r"^location$", r"^site_?name$"
+        r"^station$", r"^stn$", r"^place$", r"^location$", r"^site_?name$",
+        r"^location_?name$", r"^locationname$"
     ],
     "rainfall": [
         r"^rainfall", r"^rain", r"^rf$", r"^rf_.*", r"^precip",
         r"^precipitation", r"^value$", r"^reading$", r"^val$",
-        r"^amount$", r"^daily_?rf", r"^daily_?rain"
+        r"^amount$", r"^daily_?rf", r"^daily_?rain", r"^rf\(mm\)$", r"^rf_mm$"
     ],
     "latitude": [
         r"^lat$", r"^latitude$", r"^lat_dec$", r"^y$"

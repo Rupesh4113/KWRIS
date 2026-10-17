@@ -3,7 +3,7 @@
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/release/python-3110/)
 [![Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://share.streamlit.io/)
 [![National Hydrology Project](https://img.shields.io/badge/NHP%20Manual-May%202019-darkred.svg)](Manual_Rainfall_Data_Validation.pdf)
-[![Tests Passing](https://img.shields.io/badge/pytest-20%20passed-success.svg)](tests/)
+[![Tests Passing](https://img.shields.io/badge/pytest-30%20passed-success.svg)](tests/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 An enterprise-grade hydrological validation, anomaly detection, gap-filling, and traceable data correction platform built for the **Karnataka Water Resources Information System (KWRIS)** and state water-resource monitoring networks.
@@ -22,43 +22,53 @@ Governed by the **Manual on Rainfall Data Validation (National Hydrology Project
 
 ---
 
-## 🏗️ Architecture & Features Overview
+## 🏗️ Architecture & Multi-Checkpoint Pipeline
 
 ```mermaid
 flowchart TD
-    A["Raw Rainfall Dataset<br>(CSV / Multi-Sheet Excel)"] --> B["Ingestion & Schema Mapper<br>(src/ingestion.py)"]
-    B --> C["Data Quality Validator<br>(Missing, Negatives, Gaps, Dups)"]
-    B --> D["Complementary Anomaly Detector<br>(Ceilings, MAD Z-Score, Isolation Forest, Spatial)"]
+    A["Raw Rainfall Dataset<br>(CSV / Multi-Sheet Excel / Arkavathi)"] --> B["Step 1 & 2: Ingestion & Schema Mapper<br>(src/ingestion.py, src/schema_detection.py)"]
+    B --> CP1["Step 3: Checkpoint 1 — Station Timeline Validation<br>(src/station_timeline_validation.py)"]
+    CP1 --> C["Step 4: Checkpoint 2 — Missing Values & Invalid Readings<br>(src/data_validation.py)"]
+    CP1 --> D["Step 5: Checkpoint 3 — Anomaly Detection<br>(src/anomaly_detection.py)"]
     
     H["20-Year Historical Archive<br>(CSV / Excel)"] --> E["Historical Data Manager<br>(SQLite Climatology Baselines)"]
     
-    C --> F["Intelligent Station Prioritizer<br>(0-100 Score & Critical/High/Med/Low Tiers)"]
+    C --> F["Step 6: Station Prioritization Engine<br>(0-100 Score & Critical/High/Med/Low Tiers)"]
     D --> F
     E --> F
     
-    C --> G["AI Missing Rainfall Predictor<br>(4-Tier Prediction Hierarchy)"]
+    C --> G["Step 7: AI Missing Rainfall Predictor<br>(4-Tier Prediction Hierarchy)"]
     E --> G
     
     G --> I["Engineer Action Center & Triage<br>(Audited Review Decisions)"]
     F --> I
     
-    I --> J["Multi-Sheet Production Reporting<br>(Excel & CSV Exports with Provenance)"]
+    I --> J["Step 8: Multi-Sheet Production Reporting<br>(Excel & CSV Exports with Provenance)"]
 ```
 
-### 1. Ingestion & Schema Profiling (`src/ingestion.py`, `src/schema_detection.py`)
-- Ingests single/multi-sheet Excel (`.xlsx`, `.xls`) and CSV (`.csv`) files.
-- Automatically detects date, station ID, station name, rainfall amount, and geographic coordinates.
-- Supports both **long format** (station-date rows) and **wide format** (dates as rows, stations as columns).
-- Automatically handles missing codes (`-99`, `-999`, `NA`, `NR`, `NULL`) while strictly preserving zero rainfall ($0.0\text{ mm}$).
+### 1. Checkpoint 1: Station Timeline & Missing-Day Validation (`src/station_timeline_validation.py`)
+- First mandatory validation checkpoint in the data-processing pipeline.
+- Parses dates (`Day`) with support for ISO (`YYYY-MM-DD`), Indian standard (`DD-MM-YYYY`), and timestamps.
+- Groups records by both **Station Code** (`Station Code `, `WIMS Code`) and **Station Name** (`LocationName`).
+- Calculates observation recording window:
+  - $\text{Expected Calendar Days} = (\text{Last Recorded Date} - \text{First Recorded Date}).\text{days} + 1$
+  - $\text{Missing Calendar Days} = \text{Expected Calendar Days} - \text{Unique Valid Recorded Dates}$
+  - $\text{Data Completeness (\%)} = (\text{Unique Valid Recorded Dates} / \text{Expected Calendar Days}) \times 100$
+- **Non-destructive triage:** Preserves original data unchanged; records unparseable dates, missing codes, and names into an audit log.
+- **Duplicate Prevention:** Prevents duplicate station-date observations from inflating completeness percentages.
+- **Continuous Gap Tracking:** Detects transmission blackouts and longest consecutive missing-day intervals.
+- **Configurable Hydrological Priority:** Classifies stations into Critical, High, Medium, Low with specific actionable guidance.
+- Tested and verified on the **Arkavathi River Basin dataset** (`ARKAVATHI_RAINFALL.xlsx`, 275,770 records, 24 stations, processed in 2.14s).
 
-### 2. Multi-Method Validation & Anomaly Detection (`src/data_validation.py`, `src/anomaly_detection.py`)
-- **Missing Data:** Missing rainfall values, missing dates, and internal sequence date gaps.
-- **Invalid Readings:** Negative values ($< 0.0\text{ mm}$), duplicate station-date entries, and non-numeric corrupted strings.
-- **Domain Ceilings:** Absolute regional daily physical limit (400 mm PMP benchmark) and daily high warning (200 mm).
-- **Robust Statistical Outliers:** Station-specific Median / MAD (Median Absolute Deviation) Z-scores ($> 3.5\sigma$).
-- **Unsupervised Machine Learning:** Isolation Forest multivariate anomaly detection on seasonality, month, and magnitude.
-- **Spatial Consistency:** Identifies isolated spikes (> 50 mm vs. dry surrounding stations) and missed rain (0.0 mm during network-wide downpour).
-- **Extreme Weather Preservation:** Distinguishes *Confirmed Error*, *Suspected Anomaly*, and *Potential Extreme Weather Event*.
+### 2. Checkpoint 2: Missing Values & Invalid Readings (`src/data_validation.py`)
+- Identifies negative values ($< 0.0\text{ mm}$), null values, and configured missing value codes (`-99`, `-999`, `NA`, `NR`, `NULL`).
+- Distinguishes missing observation dates from missing rainfall values on valid dates.
+
+### 3. Checkpoint 3: Suspicious Observations & Anomaly Detection (`src/anomaly_detection.py`)
+- **Domain Ceilings:** Absolute regional daily physical limit (400 mm PMP benchmark) and daily warning (200 mm).
+- **Robust Statistical Outliers:** Station-specific Median / MAD Z-scores ($> 3.5\sigma$).
+- **Machine Learning Anomaly Detection:** Isolation Forest multivariate outlier detection.
+- **Spatial Discordance:** Flags isolated downpours (> 50 mm vs. dry neighbours) and missed rain during regional storms.
 
 ### 3. 20-Year Historical Integration (`src/historical_data.py`)
 - Ingests and independently validates up to 20 years of historical rainfall observations.

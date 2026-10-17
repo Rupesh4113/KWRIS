@@ -72,10 +72,12 @@ class ReportGenerator:
         priorities_df: pd.DataFrame,
         predictions_df: pd.DataFrame,
         audit_df: pd.DataFrame,
-        dataset_df: pd.DataFrame
+        dataset_df: pd.DataFrame,
+        checkpoint1_summary: Optional[pd.DataFrame] = None,
+        missing_dates_df: Optional[pd.DataFrame] = None
     ) -> io.BytesIO:
         """
-        Build an enterprise 6-sheet production Excel report.
+        Build an enterprise multi-sheet production Excel report including Checkpoint 1 timelines.
         """
         output = io.BytesIO()
         wb = openpyxl.Workbook()
@@ -83,8 +85,8 @@ class ReportGenerator:
 
         # 1. Executive Summary Sheet
         ws_sum = wb.create_sheet(title="Executive_Summary")
-        ws_sum.column_dimensions["A"].width = 30
-        ws_sum.column_dimensions["B"].width = 60
+        ws_sum.column_dimensions["A"].width = 32
+        ws_sum.column_dimensions["B"].width = 64
 
         ws_sum["A1"] = "RainfallIQ Platform - Quality Validation & Correction Report"
         ws_sum["A1"].font = Font(name="Calibri", size=14, bold=True, color=self.primary_color)
@@ -117,6 +119,28 @@ class ReportGenerator:
             cell_lbl.border = self.border_thin
             cell_val.border = self.border_thin
             row_idx += 1
+
+        # Checkpoint 1 Station Timeline Sheet
+        if checkpoint1_summary is not None and not checkpoint1_summary.empty:
+            ws_cp1 = wb.create_sheet(title="Station_Timeline_CP1")
+            clean_cp1 = sanitize_dataframe(checkpoint1_summary)
+            cols = list(clean_cp1.columns)
+            ws_cp1.append(cols)
+            for r in clean_cp1.itertuples(index=False):
+                ws_cp1.append(list(r))
+            self._style_sheet_headers(ws_cp1)
+
+        # Checkpoint 1 Missing Dates Detail Sheet
+        if missing_dates_df is not None and not missing_dates_df.empty:
+            ws_miss = wb.create_sheet(title="Missing_Dates_Detail")
+            # Limit to first 10,000 dates for performance if huge
+            export_miss = missing_dates_df.iloc[:15000] if len(missing_dates_df) > 15000 else missing_dates_df
+            clean_miss = sanitize_dataframe(export_miss)
+            cols = list(clean_miss.columns)
+            ws_miss.append(cols)
+            for r in clean_miss.itertuples(index=False):
+                ws_miss.append(list(r))
+            self._style_sheet_headers(ws_miss)
 
         # 2. Issues Sheet
         if not issues_df.empty:

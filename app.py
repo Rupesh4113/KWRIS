@@ -5,7 +5,6 @@ Main Streamlit Application Entrypoint.
 
 from __future__ import annotations
 from pathlib import Path
-import streamlit as pd_st
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -18,6 +17,10 @@ from src.schema_detection import detect_columns, detect_dataset_format
 from src.data_validation import DataQualityValidator
 from src.anomaly_detection import AnomalyDetector
 from src.prioritization import StationPrioritizer
+from src.station_timeline_validation import (
+    generate_checkpoint1_report,
+    Checkpoint1Thresholds
+)
 
 
 def init_session_state():
@@ -49,6 +52,73 @@ def init_session_state():
     if "predictions_df" not in st.session_state:
         st.session_state.predictions_df = pd.DataFrame()
 
+    if "checkpoint1_report" not in st.session_state:
+        st.session_state.checkpoint1_report = {}
+
+    if "cp1_thresholds" not in st.session_state:
+        st.session_state.cp1_thresholds = Checkpoint1Thresholds()
+
+
+def load_arkavathi_dataset():
+    """Load Arkavathi Basin dataset (275k records) and run Checkpoint 1."""
+    sample_dir = Path("data/sample")
+    ark_file = sample_dir / "ARKAVATHI_RAINFALL.xlsx"
+    if not ark_file.exists():
+        ark_file = sample_dir / "ARKAVATHI RAINFALL.xlsx"
+
+    if not ark_file.exists():
+        st.error("Arkavathi dataset file not found in data/sample.")
+        return
+
+    raw_df = pd.read_excel(ark_file)
+    mapping = {
+        "date": "Day",
+        "station_code": "WIMS Code",
+        "station_name": "LocationName",
+        "rainfall": "RF(mm)"
+    }
+
+    # Execute Checkpoint 1 First
+    thresh = st.session_state.get("cp1_thresholds", Checkpoint1Thresholds())
+    cp1_rep = generate_checkpoint1_report(raw_df, mapping, thresholds=thresh)
+
+    # Ingestion & Normalization
+    norm_mapping = {
+        "date": "Day",
+        "station_id": "WIMS Code",
+        "station_name": "LocationName",
+        "rainfall": "RF(mm)"
+    }
+    norm_df, summary = normalize_rainfall_dataset(raw_df, norm_mapping, unit="mm")
+
+    # Run Checkpoints 2 & 3
+    val = DataQualityValidator()
+    issues_df, val_summary = val.validate(norm_df, dataset_name="ARKAVATHI_RAINFALL.xlsx")
+
+    detector = AnomalyDetector()
+    anom_df, anom_summary = detector.detect_anomalies(norm_df, dataset_name="ARKAVATHI_RAINFALL.xlsx")
+
+    all_issues = pd.concat([issues_df, anom_df], ignore_index=True)
+    all_issues.drop_duplicates(subset=["station_id", "observation_date", "validation_rule"], inplace=True)
+
+    # Prioritization
+    prioritizer = StationPrioritizer()
+    priorities_df = prioritizer.prioritize_stations(norm_df, all_issues)
+    score, formula = prioritizer.calculate_overall_quality_score(len(norm_df), all_issues)
+
+    summary["quality_score"] = score
+    summary["quality_score_explanation"] = formula
+    summary["critical_count"] = val_summary.get("critical_count", 0) + anom_summary.get("extreme_ceilings", 0)
+    summary["high_count"] = val_summary.get("high_count", 0) + anom_summary.get("statistical_spikes", 0)
+
+    st.session_state.raw_df = raw_df
+    st.session_state.norm_df = norm_df
+    st.session_state.dataset_name = "Arkavathi Basin Rainfall (2001-2025)"
+    st.session_state.summary_info = summary
+    st.session_state.issues_df = all_issues
+    st.session_state.priorities_df = priorities_df
+    st.session_state.checkpoint1_report = cp1_rep
+
 
 def load_demo_datasets():
     """Load pre-generated realistic sample datasets for instant demonstration."""
@@ -70,7 +140,17 @@ def load_demo_datasets():
     mapping = detect_columns(cols)
     norm_df, summary = normalize_rainfall_dataset(raw_df, mapping, unit="mm")
 
-    # Run initial validation & anomaly detection
+    # Checkpoint 1
+    thresh = st.session_state.get("cp1_thresholds", Checkpoint1Thresholds())
+    cp1_mapping = {
+        "date": mapping.get("date"),
+        "station_code": mapping.get("station_id"),
+        "station_name": mapping.get("station_name"),
+        "rainfall": mapping.get("rainfall")
+    }
+    cp1_rep = generate_checkpoint1_report(raw_df, cp1_mapping, thresholds=thresh)
+
+    # Initial validation & anomaly detection
     val = DataQualityValidator()
     issues_df, val_summary = val.validate(norm_df, dataset_name="sample_current_rainfall.csv")
 
@@ -97,6 +177,7 @@ def load_demo_datasets():
     st.session_state.summary_info = summary
     st.session_state.issues_df = all_issues
     st.session_state.priorities_df = priorities_df
+    st.session_state.checkpoint1_report = cp1_rep
 
 
 def main():
@@ -128,13 +209,6 @@ def main():
             font-size: 1.05rem;
             opacity: 0.9;
         }
-        .kpi-card {
-            background-color: #F8FAFC;
-            border-left: 4px solid #8B0000;
-            padding: 16px;
-            border-radius: 6px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
         </style>
         <div class="kwris-header">
             <div class="kwris-title">🌧️ RainfallIQ</div>
@@ -153,7 +227,12 @@ def main():
 
         st.markdown("---")
         st.markdown("### **Quick Action**")
-        if st.button("⚡ Load Demo Dataset (Monsoon + 20-Yr Baseline)", use_container_width=True, type="primary"):
+        if st.button("🌊 Load Arkavathi Dataset (275k Rows)", use_container_width=True, type="primary"):
+            with st.spinner("Loading Arkavathi dataset & computing Checkpoint 1 timelines..."):
+                load_arkavathi_dataset()
+                st.success("Arkavathi dataset loaded! Proceed to Checkpoint 1 on Page 3.")
+
+        if st.button("⚡ Load Monsoon 2024 Demo", use_container_width=True):
             with st.spinner("Ingesting 20-year baseline & running validation engine..."):
                 load_demo_datasets()
                 st.success("Demo dataset loaded successfully! Head to Page 1: Overview.")
@@ -168,16 +247,25 @@ def main():
         st.markdown("""
         ### **Welcome to RainfallIQ**
         **RainfallIQ** is a mission-critical hydrological engineering platform designed for water-resource engineers,
-        hydrologists, and quality-assurance teams. It combines strict adherence to the **National Hydrology Project (NHP)**
-        Rainfall Data Validation Manual with state-of-the-art machine learning to automate the entire data quality lifecycle:
+        hydrologists, and quality-assurance teams. It enforces the **National Hydrology Project (NHP)** validation standards
+        with a strict multi-checkpoint processing pipeline:
 
-        1. **Multi-Source Ingestion:** Ingest CSV or multi-sheet Excel files with automatic schema mapping and unit conversion.
-        2. **Multi-Tier Quality Validation:** Instant detection of missing records, negative readings, duplicates, and sequence gaps.
-        3. **Complementary Anomaly Detection:** Domain ceilings, robust MAD Z-scores, Isolation Forest ML, and spatial discordance checks.
-        4. **20-Year Historical Integration:** Station coverage profiling, daily climatological baselines, and persistent SQLite storage.
-        5. **AI Missing Rainfall Prediction:** 4-tier prediction hierarchy (Climatology, Time-Series Interpolation, Random Forest ML, Spatial IDW).
-        6. **Engineer Prioritization & Action Center:** Explainable station triage ranking (0–100) with auditable review trails.
-        7. **Comprehensive Audit Reporting:** 6-sheet production Excel and CSV exports preserving original measurements.
+        1. **Checkpoint 1: Station Timeline & Missing-Day Validation**
+           - Full observation window tracking (`min_date` to `max_date`)
+           - Expected calendar days vs unique valid recorded dates
+           - Precise missing day and consecutive blackout gap analysis
+           - Duplicate station-date detection without inflating completeness
+           - Non-destructive triage preserving all invalid records in an audit log
+        2. **Checkpoint 2: Missing Values & Invalid Readings Validation**
+           - Identification of negative values ($< 0.0\text{ mm}$), nulls, and missing codes (`-99`, `-999`, `NA`, `NR`).
+        3. **Checkpoint 3: Suspicious Observations & Anomaly Detection**
+           - IMD PMP physical ceilings (400 mm), MAD Z-scores, Isolation Forest ML, and spatial discordance.
+        4. **Checkpoint 4: 20-Year Historical Climatology & AI Prediction**
+           - 4-tier prediction hierarchy (Climatology, Short Interpolation, Random Forest ML, Spatial IDW).
+        5. **Checkpoint 5: Station Prioritization & Engineer Triage**
+           - Transparent 0–100 priority scoring and auditable review decision log.
+        6. **Reporting & Provenance Export**
+           - Multi-sheet Excel workbook and sanitized CSV exports with `ESTIMATED — NOT OBSERVED` tags.
         """)
 
         st.markdown("---")
@@ -189,8 +277,12 @@ def main():
             c2.metric("Total Flagged Issues", len(st.session_state.issues_df))
             c3.metric("Critical / High", f"{st.session_state.summary_info.get('critical_count', 0)} / {st.session_state.summary_info.get('high_count', 0)}")
             c4.metric("Predicted Estimates", len(st.session_state.predictions_df))
+            
+            if "checkpoint1_report" in st.session_state and st.session_state.checkpoint1_report:
+                cp1_m = st.session_state.checkpoint1_report.get("metrics", {})
+                st.info(f"**Checkpoint 1 Summary:** {cp1_m.get('total_stations', 0)} stations analyzed | {cp1_m.get('overall_completeness_pct', 0)}% date completeness | {cp1_m.get('total_missing_days', 0):,} missing observation days.")
         else:
-            st.warning("No dataset currently active in session. Click the button in the sidebar or navigate to **Page 2: Upload Data** to get started.")
+            st.warning("No dataset currently active in session. Click the buttons in the sidebar or navigate to **Page 2: Upload Data** to get started.")
 
     with col_right:
         st.markdown("### **Hydrological Principles**")

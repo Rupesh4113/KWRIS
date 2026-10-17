@@ -13,6 +13,7 @@ from src.schema_detection import detect_columns, detect_dataset_format, convert_
 from src.data_validation import DataQualityValidator
 from src.anomaly_detection import AnomalyDetector
 from src.prioritization import StationPrioritizer
+from src.station_timeline_validation import generate_checkpoint1_report, Checkpoint1Thresholds
 
 
 def render_upload_page():
@@ -134,24 +135,60 @@ def render_upload_page():
                     "longitude": None if lon_col == "[None]" else lon_col
                 }
 
+                # Checkpoint 1 Configurable Thresholds Expander
+                with st.expander("⚙️ Checkpoint 1 Priority & Timeline Thresholds (Optional)", expanded=False):
+                    th1, th2, th3 = st.columns(3)
+                    with th1:
+                        c_crit = st.number_input("Critical Completeness %", value=70.0, min_value=10.0, max_value=99.0, step=5.0)
+                        c_high = st.number_input("High Completeness %", value=85.0, min_value=20.0, max_value=99.0, step=5.0)
+                    with th2:
+                        g_crit = st.number_input("Critical Consecutive Gap (Days)", value=30, min_value=5, max_value=365)
+                        g_high = st.number_input("High Consecutive Gap (Days)", value=14, min_value=3, max_value=180)
+                    with th3:
+                        m_crit = st.number_input("Critical Missing Days", value=180, min_value=10, max_value=1000)
+                        m_high = st.number_input("High Missing Days", value=45, min_value=5, max_value=500)
+
+                    active_thresholds = Checkpoint1Thresholds(
+                        critical_completeness_pct=c_crit,
+                        high_completeness_pct=c_high,
+                        critical_consecutive_gap_days=int(g_crit),
+                        high_consecutive_gap_days=int(g_high),
+                        critical_missing_days=int(m_crit),
+                        high_missing_days=int(m_high)
+                    )
+                    st.session_state.cp1_thresholds = active_thresholds
+
                 if st.button("🚀 Process, Validate & Profile Dataset", type="primary", use_container_width=True):
-                    with st.spinner("Normalizing dataset and executing validation engine..."):
+                    with st.spinner("Executing Checkpoint 1: Station Timeline & Continuity Validation..."):
+                        # Step 3: Checkpoint 1 Validation
+                        cp1_mapping = {
+                            "date": date_col,
+                            "station_code": stn_id_col,
+                            "station_name": stn_name_col if stn_name_col != "[Use Station ID]" else stn_id_col,
+                            "rainfall": rf_col
+                        }
+                        cp1_rep = generate_checkpoint1_report(
+                            raw_df, cp1_mapping, thresholds=st.session_state.get("cp1_thresholds", Checkpoint1Thresholds())
+                        )
+                        st.session_state.checkpoint1_report = cp1_rep
+
+                        # Normalizing dataset
                         norm_df, summary = normalize_rainfall_dataset(
                             raw_df, active_mapping, unit=unit, format_type=format_type
                         )
 
-                        # Run Validation Rules
+                        # Step 4: Checkpoint 2 Validation Rules
                         val = DataQualityValidator()
                         issues_df, val_summary = val.validate(norm_df, dataset_name=filename)
 
-                        # Run Anomaly Detection
+                        # Step 5: Checkpoint 3 Anomaly Detection
                         detector = AnomalyDetector()
                         anom_df, anom_summary = detector.detect_anomalies(norm_df, dataset_name=filename)
 
                         all_issues = pd.concat([issues_df, anom_df], ignore_index=True)
                         all_issues.drop_duplicates(subset=["station_id", "observation_date", "validation_rule"], inplace=True)
 
-                        # Run Prioritization
+                        # Step 6: Prioritization
                         prioritizer = StationPrioritizer()
                         cov_df = st.session_state.hist_mgr.get_station_coverage(list(norm_df["station_id"].unique()))
                         priorities_df = prioritizer.prioritize_stations(norm_df, all_issues, coverage_df=cov_df)
@@ -169,8 +206,13 @@ def render_upload_page():
                         st.session_state.issues_df = all_issues
                         st.session_state.priorities_df = priorities_df
 
-                        st.success(f"✅ Processed {len(norm_df):,} records across {summary['total_stations']} stations! Data Quality Score: {score}%.")
-                        st.info("Navigate to **Page 3: Validation Results** or **Page 4: Station Health** to review issues.")
+                        cp1_m = cp1_rep.get("metrics", {})
+                        st.success(
+                            f"✅ Checkpoint 1 & Pipeline Complete! {cp1_m.get('total_stations', 0)} stations identified, "
+                            f"{cp1_m.get('overall_completeness_pct', 0)}% date completeness, "
+                            f"{cp1_m.get('total_missing_days', 0):,} missing calendar days."
+                        )
+                        st.info("Navigate to **Page 3: Validation Results** to inspect Checkpoint 1 Station Timeline details.")
 
             except Exception as e:
                 st.error(f"Error reading file: {str(e)}")
@@ -239,7 +281,24 @@ def render_upload_page():
             - Enables multi-year climatological comparisons and Random Forest ML prediction.
             """)
 
-        if st.button("⚡ Click to Load Both Sample Datasets", type="primary", use_container_width=True):
+        st.markdown("---")
+        st.markdown("#### **Arkavathi River Basin Dataset (2001–2025)**")
+        st.markdown("""
+        - **Source:** `ARKAVATHI_RAINFALL.xlsx` (275,770 records across 24 hydrological stations).
+        - **Format:** `Day`, `WIMS Code`, `LocationName`, `RF(mm)`.
+        - **Timeline Window:** 2001-01-01 to 2025-12-31.
+        - **Purpose:** Rigorously stress-test **Checkpoint 1: Station Timeline and Missing-Day Validation**.
+        """)
+        if st.button("🌊 Load Arkavathi Basin Dataset (275,770 records)", type="secondary", use_container_width=True):
+            from app import load_arkavathi_dataset
+            with st.spinner("Loading Arkavathi dataset and executing Checkpoint 1..."):
+                load_arkavathi_dataset()
+                st.success("✅ Arkavathi dataset loaded and Checkpoint 1 validated!")
+                st.rerun()
+
+        st.markdown("---")
+        st.markdown("#### **Synthetic Monsoon Demonstrations**")
+        if st.button("⚡ Click to Load Synthetic Monsoon + 20-Yr Baseline Datasets", type="primary", use_container_width=True):
             from app import load_demo_datasets
             with st.spinner("Loading demo datasets..."):
                 load_demo_datasets()
