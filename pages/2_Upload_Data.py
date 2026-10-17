@@ -12,6 +12,7 @@ from src.ingestion import read_raw_data, normalize_rainfall_dataset, get_excel_s
 from src.schema_detection import detect_columns, detect_dataset_format, convert_wide_to_long
 from src.data_validation import DataQualityValidator
 from src.anomaly_detection import AnomalyDetector
+from src.secondary_validation import SecondaryQualityValidator
 from src.prioritization import StationPrioritizer
 from src.station_timeline_validation import generate_checkpoint1_report, Checkpoint1Thresholds
 
@@ -185,7 +186,11 @@ def render_upload_page():
                         detector = AnomalyDetector()
                         anom_df, anom_summary = detector.detect_anomalies(norm_df, dataset_name=filename)
 
-                        all_issues = pd.concat([issues_df, anom_df], ignore_index=True)
+                        # Step 5b: Checkpoint 4 NHP Secondary Validation Rules (S1–S8, P5)
+                        sec_val = SecondaryQualityValidator()
+                        sec_issues, sec_summary = sec_val.validate_dataset(norm_df, dataset_name=filename)
+
+                        all_issues = pd.concat([issues_df, anom_df, sec_issues], ignore_index=True)
                         all_issues.drop_duplicates(subset=["station_id", "observation_date", "validation_rule"], inplace=True)
 
                         # Step 6: Prioritization

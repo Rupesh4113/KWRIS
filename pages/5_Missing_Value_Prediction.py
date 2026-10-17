@@ -36,13 +36,17 @@ def render_prediction_page():
         method_choice = st.selectbox(
             "Prediction Hierarchy Mode:",
             [
-                "Auto Hierarchy (Recommended)",
+                "Auto Hierarchy (NHP Chapter 5 Recommended)",
+                "G1: Co-located Alternate Gauge (NHP Sec 5.2)",
+                "G2: Arithmetic Average Method (Normal within +-10%) (NHP Sec 5.6.2)",
+                "G3: Normal-Ratio Method (Normal differs > 10%) (NHP Sec 5.6.3)",
+                "G4: Distance Power Method (IDW, b=2) (NHP Sec 5.6.4)",
+                "G5: Validated Linear Regression (R^2 >= 0.70) (NHP Sec 5.7.1)",
+                "G6: Machine Learning (Random Forest)",
                 "Method 1: Historical Seasonal Baseline",
-                "Method 2: Time-Series Interpolation",
-                "Method 3: Machine Learning (Random Forest)",
-                "Method 4: Spatial IDW"
+                "Method 2: Time-Series Interpolation (<= 3 days, non-default)"
             ],
-            help="Auto Hierarchy selects the most scientifically justified method based on gap length, historical baseline, and spatial neighbors."
+            help="Auto Hierarchy prioritizes co-located gauges (G1), spatial methods based on normal rainfall (G2/G3), distance weighting (G4), validated regression (G5), and machine learning (G6). Linear interpolation is never default."
         )
 
     with c3:

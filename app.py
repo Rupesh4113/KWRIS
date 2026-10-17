@@ -16,6 +16,7 @@ from src.ingestion import read_raw_data, normalize_rainfall_dataset
 from src.schema_detection import detect_columns, detect_dataset_format
 from src.data_validation import DataQualityValidator
 from src.anomaly_detection import AnomalyDetector
+from src.secondary_validation import SecondaryQualityValidator
 from src.prioritization import StationPrioritizer
 from src.station_timeline_validation import (
     generate_checkpoint1_report,
@@ -91,14 +92,17 @@ def load_arkavathi_dataset():
     }
     norm_df, summary = normalize_rainfall_dataset(raw_df, norm_mapping, unit="mm")
 
-    # Run Checkpoints 2 & 3
+    # Run Checkpoints 2, 3 & 4
     val = DataQualityValidator()
     issues_df, val_summary = val.validate(norm_df, dataset_name="ARKAVATHI_RAINFALL.xlsx")
 
     detector = AnomalyDetector()
     anom_df, anom_summary = detector.detect_anomalies(norm_df, dataset_name="ARKAVATHI_RAINFALL.xlsx")
 
-    all_issues = pd.concat([issues_df, anom_df], ignore_index=True)
+    sec_val = SecondaryQualityValidator()
+    sec_issues, sec_summary = sec_val.validate_dataset(norm_df, dataset_name="ARKAVATHI_RAINFALL.xlsx")
+
+    all_issues = pd.concat([issues_df, anom_df, sec_issues], ignore_index=True)
     all_issues.drop_duplicates(subset=["station_id", "observation_date", "validation_rule"], inplace=True)
 
     # Prioritization
@@ -157,7 +161,10 @@ def load_demo_datasets():
     detector = AnomalyDetector()
     anom_df, anom_summary = detector.detect_anomalies(norm_df, dataset_name="sample_current_rainfall.csv")
 
-    all_issues = pd.concat([issues_df, anom_df], ignore_index=True)
+    sec_val = SecondaryQualityValidator()
+    sec_issues, sec_summary = sec_val.validate_dataset(norm_df, dataset_name="sample_current_rainfall.csv")
+
+    all_issues = pd.concat([issues_df, anom_df, sec_issues], ignore_index=True)
     all_issues.drop_duplicates(subset=["station_id", "observation_date", "validation_rule"], inplace=True)
 
     # Station Prioritization & Quality Score

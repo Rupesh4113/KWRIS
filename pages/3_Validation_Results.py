@@ -37,10 +37,11 @@ def render_validation_results_page():
     cp1_rep = st.session_state.checkpoint1_report
 
     # Main Tabs for the Validation Checkpoints
-    tab_cp1, tab_cp2, tab_cp3 = st.tabs([
+    tab_cp1, tab_cp2, tab_cp3, tab_cp4 = st.tabs([
         "🕒 Checkpoint 1 — Station Timeline Validation",
-        "⚠️ Checkpoint 2 — Missing Values & Invalid Readings",
-        "🌪️ Checkpoint 3 — Suspicious Observations & Anomalies"
+        "⚠️ Checkpoint 2 — Limits & Record Integrity (P1, P2)",
+        "🌪️ Checkpoint 3 — Ceilings & Statistical Anomalies (P3, P4)",
+        "🌐 Checkpoint 4 — Spatial Homogeneity & NHP Rules (S1–S8, P5)"
     ])
 
     # =========================================================================
@@ -247,6 +248,44 @@ def render_validation_results_page():
                 st.success("No Checkpoint 3 anomalies detected!")
         else:
             st.info("No anomalies detected.")
+
+    # =========================================================================
+    # TAB 4: CHECKPOINT 4 — SPATIAL HOMOGENEITY & NHP RULES (S1–S8, P5)
+    # =========================================================================
+    with tab_cp4:
+        st.subheader("Checkpoint 4 — Spatial Homogeneity & NHP Rules (S1–S8, P5)")
+        st.caption("Governed by NHP Manual Chapter 4: Quadrant reference selection, shifted-date checks, multi-day accumulations, false zeroes, rainy-day frequency, and double-mass trend analysis.")
+
+        if not issues_df.empty:
+            cp4_issues = issues_df[
+                issues_df["validation_rule"].str.startswith("S") |
+                issues_df["validation_rule"].str.startswith("P5")
+            ]
+            if not cp4_issues.empty:
+                # Summary metrics
+                c_s1, c_s2, c_s3, c_s4 = st.columns(4)
+                s2_count = int(cp4_issues["validation_rule"].str.startswith("S2").sum())
+                s3_count = int((cp4_issues["validation_rule"] == "S3_SHIFTED_DATE").sum())
+                s4_count = int((cp4_issues["validation_rule"] == "S4_ACCUMULATED_TOTAL").sum())
+                s8_count = int((cp4_issues["validation_rule"] == "S8_DOUBLE_MASS").sum())
+
+                c_s1.metric("Spatial Homogeneity Departures (S2)", f"{s2_count}")
+                c_s2.metric("Shifted Dates / Observer Lags (S3)", f"{s3_count}")
+                c_s3.metric("Multi-Day Accumulations (S4)", f"{s4_count}")
+                c_s4.metric("Double-Mass Systematic Breaks (S8)", f"{s8_count}")
+
+                st.markdown("---")
+                st.dataframe(
+                    cp4_issues[[
+                        "station_id", "observation_date", "original_value", "issue_type",
+                        "severity", "validation_rule", "explanation", "recommended_action"
+                    ]],
+                    use_container_width=True
+                )
+            else:
+                st.success("No Checkpoint 4 spatial inconsistencies or systematic shifts detected!")
+        else:
+            st.info("No spatial validation issues recorded.")
 
 
 render_validation_results_page()
